@@ -3,7 +3,7 @@ Pydantic models for API request/response schemas.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import date
 from enum import Enum
 
@@ -81,8 +81,11 @@ class SearchTermResult(BaseModel):
     id: int
     date: Optional[str]
     campaign_name: str
+    campaign_id: Optional[str] = None
     ad_group_name: str
-    portfolio: Optional[str]
+    ad_group_id: Optional[str] = None
+    portfolio: Optional[str] = None
+    portfolio_id: Optional[str] = None
     targeting: str
     match_type: str
     customer_search_term: str
@@ -109,8 +112,23 @@ class AnalysisResponse(BaseModel):
 class NegativeExportRequest(BaseModel):
     """Request for generating negative bulk file."""
     session_id: str
-    selected_ids: List[int]
+    selected_ids: Optional[List[int]] = None
+    items: Optional[List[Dict[str, Any]]] = None # Direct data from frontend
     use_negative_phrase: bool = False
+
+
+class BidChangeRequest(BaseModel):
+    """Request for generating bid optimization bulk file."""
+    session_id: str
+    # List of items to update. Each item usually comes from ScaleOpportunityItem or HighACOSItem.
+    # We need minimal info to identify the target.
+    items: List[Dict[str, Any]] 
+
+
+class BudgetChangeRequest(BaseModel):
+    """Request for generating budget optimization bulk file."""
+    session_id: str
+    items: List[Dict[str, Any]]
 
 
 class AutoTargetingType(str, Enum):
@@ -156,3 +174,84 @@ class FilterOptions(BaseModel):
     ad_groups: List[str]
     portfolios: List[str]
     date_range: dict
+
+
+class BleedingSpendItem(BaseModel):
+    """Item for Bleeding Spend widget (Immediate Negatives)."""
+    id: Optional[int] = None
+    search_term: str
+    campaign_name: str
+    ad_group_name: str
+    campaign_id: Optional[str] = None
+    ad_group_id: Optional[str] = None
+    match_type: str
+    spend: float
+    clicks: int
+    severity_score: float
+    action_type: str = "Negative"
+
+
+class HighACOSItem(BaseModel):
+    """Item for High ACOS widget (Root Cause Analysis)."""
+    id: Optional[int] = None
+    search_term: str
+    targeting: str # The actual keyword/ASIN targeted
+    match_type: str
+    campaign_name: str
+    campaign_id: Optional[str] = None
+    ad_group_id: Optional[str] = None
+    acos: float
+    spend: float
+    sales: float
+    root_cause: str # "Low CTR", "High CPC", "Low CVR"
+    value: float # The bad metric value (e.g. the specific CTR)
+    avg_value: float # The benchmark (e.g. avg CTR)
+    action_type: str # "Negative", "Bid Down", "Review"
+
+
+class ScaleOpportunityItem(BaseModel):
+    """Item for Scale Opportunities widget."""
+    id: Optional[int] = None
+    search_term: str
+    targeting: str
+    match_type: str
+    campaign_name: str
+    campaign_id: Optional[str] = None
+    ad_group_id: Optional[str] = None
+    acos: float
+    orders: int
+    conversion_rate: float
+    current_bid: Optional[float] = None
+    suggested_bid: Optional[float] = None
+    action_type: str = "Bid Increase"
+
+
+class BudgetSaturationItem(BaseModel):
+    """Item for Budget Saturation widget."""
+    campaign_name: str
+    daily_budget: float
+    spend: float
+    utilization: float # spend / budget
+    acos: float
+    suggested_budget: float
+    action_type: str = "Budget Increase"
+
+
+class HealthScore(BaseModel):
+    """PPC Health Score metrics."""
+    score: int
+    spend_efficiency_score: int
+    acos_stability_score: int
+    exact_match_score: int
+    details: Dict[str, float]
+
+
+class DecisionCenterResponse(BaseModel):
+    """Aggregated response for the Decision Center dashboard."""
+    bleeding_spend: List[BleedingSpendItem]
+    high_acos: List[HighACOSItem]
+    scale_opportunities: List[ScaleOpportunityItem]
+    budget_saturation: List[BudgetSaturationItem]
+    health_score: HealthScore
+    total_urgent_actions: int
+    total_growth_actions: int

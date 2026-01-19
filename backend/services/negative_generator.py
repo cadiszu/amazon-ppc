@@ -9,31 +9,54 @@ from typing import List
 from services.parser import is_asin
 
 
-# Amazon Bulk Upload column structure for Negative Keywords
-NEGATIVE_KEYWORD_COLUMNS = [
-    'Record Type',
+# Standard Amazon Bulk Upload Columns (v2.0 / Extended)
+BULK_HEADERS = [
+    'Product',
+    'Entity',
+    'Operation',
     'Campaign ID',
-    'Campaign Name',
     'Ad Group ID',
-    'Ad Group Name',
     'Portfolio ID',
-    'Keyword',
+    'Ad ID',
+    'Keyword ID',
+    'Product Targeting ID',
+    'Campaign Name',
+    'Ad Group Name',
+    'Campaign Name (Informational only)',
+    'Ad Group Name (Informational only)',
+    'Portfolio Name (Informational only)',
+    'Start Date',
+    'End Date',
+    'Targeting Type',
+    'State',
+    'Campaign State (Informational only)',
+    'Ad Group State (Informational only)',
+    'Daily Budget',
+    'SKU',
+    'ASIN (Informational only)',
+    'Eligibility Status (Informational only)',
+    'Reason for Ineligibility (Informational only)',
+    'Ad Group Default Bid',
+    'Ad Group Default Bid (Informational only)',
+    'Bid',
+    'Keyword Text',
     'Match Type',
-    'Operation',
-    'Status'
-]
-
-# Amazon Bulk Upload column structure for Negative Product Targeting
-NEGATIVE_PRODUCT_COLUMNS = [
-    'Record Type',
-    'Campaign ID',
-    'Campaign Name',
-    'Ad Group ID',
-    'Ad Group Name',
-    'Portfolio ID',
+    'Bidding Strategy',
+    'Placement',
+    'Percentage',
     'Product Targeting Expression',
-    'Operation',
-    'Status'
+    'Resolved Product Targeting Expression (Informational only)',
+    'Impressions',
+    'Clicks',
+    'Click-through Rate',
+    'Spend',
+    'Sales',
+    'Orders',
+    'Units',
+    'Conversion Rate',
+    'ACOS',
+    'CPC',
+    'ROAS'
 ]
 
 
@@ -46,53 +69,9 @@ def classify_negative_type(search_term: str) -> str:
     return 'negative_keyword'
 
 
-def generate_negative_keyword_row(
-    campaign_name: str,
-    ad_group_name: str,
-    keyword: str,
-    match_type: str = 'Negative Exact',
-    campaign_id: str = '',
-    ad_group_id: str = '',
-    portfolio_id: str = ''
-) -> dict:
-    """Generate a row for negative keyword bulk upload."""
-    return {
-        'Record Type': 'Keyword',
-        'Campaign ID': campaign_id,
-        'Campaign Name': campaign_name,
-        'Ad Group ID': ad_group_id,
-        'Ad Group Name': ad_group_name,
-        'Portfolio ID': portfolio_id,
-        'Keyword': keyword,
-        'Match Type': match_type,
-        'Operation': 'Create',
-        'Status': 'Enabled'
-    }
-
-
-def generate_negative_product_row(
-    campaign_name: str,
-    ad_group_name: str,
-    asin: str,
-    campaign_id: str = '',
-    ad_group_id: str = '',
-    portfolio_id: str = ''
-) -> dict:
-    """Generate a row for negative product targeting bulk upload."""
-    # Format ASIN as product targeting expression
-    targeting_expression = f'asin="{asin.upper()}"'
-    
-    return {
-        'Record Type': 'Product Targeting',
-        'Campaign ID': campaign_id,
-        'Campaign Name': campaign_name,
-        'Ad Group ID': ad_group_id,
-        'Ad Group Name': ad_group_name,
-        'Portfolio ID': portfolio_id,
-        'Product Targeting Expression': targeting_expression,
-        'Operation': 'Create',
-        'Status': 'Enabled'
-    }
+def generate_empty_row() -> dict:
+    """Create a row with all headers empty."""
+    return {col: None for col in BULK_HEADERS}
 
 
 def generate_negatives_bulk_file(
@@ -101,73 +80,79 @@ def generate_negatives_bulk_file(
 ) -> BytesIO:
     """
     Generate an Amazon-compliant bulk upload file for negative keywords and product targets.
-    
-    Args:
-        selected_items: List of dictionaries containing:
-            - customer_search_term
-            - campaign_name
-            - ad_group_name
-            - is_asin
-            - campaign_id (optional)
-            - ad_group_id (optional)
-            - portfolio_id (optional)
-        use_negative_phrase: If True, use Negative Phrase instead of Negative Exact
-    
-    Returns:
-        BytesIO object containing the Excel file
+    Uses the single-sheet format with specific headers.
     """
-    keyword_rows = []
-    product_rows = []
+    rows = []
     
     match_type = 'Negative Phrase' if use_negative_phrase else 'Negative Exact'
     
     for item in selected_items:
-        search_term = item.get('customer_search_term', '')
+        search_term = item.get('customer_search_term', '').replace('/', ' ')
         campaign_name = item.get('campaign_name', '')
+        # Remove extra quotes if present in campaign name
+        campaign_name = campaign_name.strip("'").strip('"')
+        
         ad_group_name = item.get('ad_group_name', '')
         campaign_id = item.get('campaign_id', '')
         ad_group_id = item.get('ad_group_id', '')
         portfolio_id = item.get('portfolio_id', '')
         item_is_asin = item.get('is_asin', False)
         
+        row = generate_empty_row()
+        
+        # Common fields for Negative Keyword and Product Targeting
+        row['Product'] = 'Sponsored Products'
+        row['Operation'] = 'Create'
+        
+        # IDs mapping
+        if campaign_id:
+            row['Campaign ID'] = campaign_id
+        if ad_group_id:
+            row['Ad Group ID'] = ad_group_id
+        if portfolio_id:
+            row['Portfolio ID'] = portfolio_id
+            
+        # Names mapping
+        row['Campaign Name'] = campaign_name
+        row['Ad Group Name'] = ad_group_name
+        
+        row['State'] = 'Enabled'
+        
         if item_is_asin:
-            row = generate_negative_product_row(
-                campaign_name=campaign_name,
-                ad_group_name=ad_group_name,
-                asin=search_term,
-                campaign_id=campaign_id,
-                ad_group_id=ad_group_id,
-                portfolio_id=portfolio_id
-            )
-            product_rows.append(row)
+            # Negative Product Targeting
+            row['Entity'] = 'Negative Product Targeting' # User macro uses this
+            # row['Entity'] = 'Ad Group Negative Product Targeting' # 2.0 Standard
+            # Following macro: "Negative Product Targeting"
+            
+            # Targeting Expression
+            # Macro: asin="B0..."
+            row['Product Targeting Expression'] = f'asin="{search_term.upper()}"'
+            
         else:
-            row = generate_negative_keyword_row(
-                campaign_name=campaign_name,
-                ad_group_name=ad_group_name,
-                keyword=search_term,
-                match_type=match_type,
-                campaign_id=campaign_id,
-                ad_group_id=ad_group_id,
-                portfolio_id=portfolio_id
-            )
-            keyword_rows.append(row)
+            # Negative Keyword
+            row['Entity'] = 'Negative Keyword' # User macro uses this
+            # row['Entity'] = 'Ad Group Negative Keyword' # 2.0 Standard
+            # Following macro: "Negative Keyword"
+            
+            row['Keyword Text'] = search_term
+            row['Match Type'] = match_type
+            
+        rows.append(row)
     
-    # Create DataFrames
+    # Create DataFrame
     output = BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        if keyword_rows:
-            df_keywords = pd.DataFrame(keyword_rows, columns=NEGATIVE_KEYWORD_COLUMNS)
-            df_keywords.to_excel(writer, sheet_name='Negative Keywords', index=False)
-        
-        if product_rows:
-            df_products = pd.DataFrame(product_rows, columns=NEGATIVE_PRODUCT_COLUMNS)
-            df_products.to_excel(writer, sheet_name='Negative Products', index=False)
-        
-        # If no data, create empty sheets with headers
-        if not keyword_rows and not product_rows:
-            df_empty = pd.DataFrame(columns=NEGATIVE_KEYWORD_COLUMNS)
-            df_empty.to_excel(writer, sheet_name='Negative Keywords', index=False)
+        if not rows:
+            # Empty template
+            df = pd.DataFrame(columns=BULK_HEADERS)
+        else:
+            df = pd.DataFrame(rows, columns=BULK_HEADERS)
+            
+        # Write to "Sponsored Products Campaigns" sheet (Standard for Bulk 2.0)
+        # Or "Bulk" as in macro? Macro reads from Bulk, writes to "Working" then likely used for upload.
+        # Standard sheet name is "Sponsored Products Campaigns".
+        df.to_excel(writer, sheet_name='Sponsored Products Campaigns', index=False)
     
     output.seek(0)
     return output
@@ -178,38 +163,13 @@ def generate_negatives_csv(
     use_negative_phrase: bool = False
 ) -> BytesIO:
     """
-    Generate a CSV bulk upload file for negative keywords (single sheet format).
+    Generate a CSV bulk upload file for negative keywords.
     """
-    rows = []
-    match_type = 'Negative Phrase' if use_negative_phrase else 'Negative Exact'
+    # Simply reuse the Excel logic but save as CSV
+    # Note: CSV usually doesn't have sheets, but structure is same rows
+    excel_io = generate_negatives_bulk_file(selected_items, use_negative_phrase)
+    df = pd.read_excel(excel_io)
     
-    for item in selected_items:
-        search_term = item.get('customer_search_term', '')
-        campaign_name = item.get('campaign_name', '')
-        ad_group_name = item.get('ad_group_name', '')
-        item_is_asin = item.get('is_asin', False)
-        
-        if item_is_asin:
-            rows.append({
-                'Record Type': 'Product Targeting',
-                'Campaign Name': campaign_name,
-                'Ad Group Name': ad_group_name,
-                'Product Targeting Expression': f'asin="{search_term.upper()}"',
-                'Operation': 'Create',
-                'Status': 'Enabled'
-            })
-        else:
-            rows.append({
-                'Record Type': 'Keyword',
-                'Campaign Name': campaign_name,
-                'Ad Group Name': ad_group_name,
-                'Keyword': search_term,
-                'Match Type': match_type,
-                'Operation': 'Create',
-                'Status': 'Enabled'
-            })
-    
-    df = pd.DataFrame(rows)
     output = BytesIO()
     df.to_csv(output, index=False)
     output.seek(0)

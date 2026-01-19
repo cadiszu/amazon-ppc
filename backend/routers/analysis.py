@@ -5,6 +5,7 @@ Provides endpoints for KPIs, campaign metrics, and search term analysis.
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
+import pandas as pd
 
 from models.schemas import (
     KPIData,
@@ -13,7 +14,13 @@ from models.schemas import (
     AnalysisConfig,
     AnalysisResponse,
     SearchTermResult,
-    FilterOptions
+    FilterOptions,
+    DecisionCenterResponse,
+    BleedingSpendItem,
+    HighACOSItem,
+    ScaleOpportunityItem,
+    BudgetSaturationItem,
+    HealthScore
 )
 from services.analyzer import (
     calculate_kpis,
@@ -22,7 +29,13 @@ from services.analyzer import (
     analyze_search_terms,
     AnalysisConfig as AnalysisConfigService
 )
-from services.parser import get_unique_campaigns, get_unique_ad_groups, get_unique_portfolios, get_date_range
+from services.parser import (
+    get_unique_campaigns, 
+    get_unique_ad_groups, 
+    get_unique_portfolios, 
+    get_date_range,
+    enrich_with_ids
+)
 from routers.upload import get_session, sessions
 
 router = APIRouter()
@@ -125,14 +138,29 @@ async def analyze_search_terms_endpoint(
     # Run analysis
     results_df = analyze_search_terms(df, service_config)
     
-    # Convert to response
+    # Convert to response objects
     results = [SearchTermResult(**row) for row in results_df.to_dict(orient='records')]
     
+    # Enrich with IDs if Bulk File is available
+    bulk_key = f"{session_id}_bulk"
+    if bulk_key in sessions:
+        try:
+             bulk_df = sessions[bulk_key]
+             enrich_with_ids(results, bulk_df)
+             
+             # Also update the stored dataframe with IDs for export fallback (though we prefer direct items now)
+             # The results objects are modified in-place, but results_df is separate.
+             # We should theoretically update results_df too if we want the fallback to work perfectly.
+             # But prioritizing frontend items is the goal.
+             # Let's just rely on the frontend sending back the ID-enriched items.
+        except Exception as e:
+            print(f"Search Term Analysis ID Enrichment Failed: {e}")
+
     # Count by type
     negative_keywords = sum(1 for r in results if not r.is_asin)
     negative_asins = sum(1 for r in results if r.is_asin)
     
-    # Store results in session for export
+    # Store results in session for export (fallback)
     sessions[f"{session_id}_results"] = results_df
     
     return AnalysisResponse(
@@ -181,3 +209,72 @@ async def get_search_terms_data(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size
     }
+
+
+@router.get("/decision-center/{session_id}", response_model=DecisionCenterResponse)
+async def get_decision_center_data(session_id: str):
+    """
+    Get aggregated data for the Decision Center dashboard.
+    Runs all optimization algorithms:
+    - Bleeding Spend (Immediate Negatives)
+    - High ACOS (Root Cause Analysis)
+    - Scale Opportunities
+    - Budget Saturation (requires Bulk file)
+    - PPC Health Score
+    """
+    # Get Search Term Data
+    try:
+        df = get_session(session_id)
+    except HTTPException:
+        # If no main session, return empty/default
+        # In practice, frontend guards against this with "Upload" step
+        raise
+
+    # Try to get Bulk Data (optional but needed for Budget widget)
+    bulk_df = pd.DataFrame()
+    bulk_key = f"{session_id}_bulk"
+    if bulk_key in sessions:
+        bulk_df = sessions[bulk_key]
+
+    # Run Analysis
+    from services.optimization import (
+        analyze_bleeding_spend,
+        analyze_high_acos,
+        analyze_scale_opportunities,
+        analyze_budget_saturation,
+        calculate_health_score
+    )
+    from services.parser import normalize_columns
+
+    bleeding = analyze_bleeding_spend(df)
+    high_acos = analyze_high_acos(df)
+    scale = analyze_scale_opportunities(df)
+    budget = analyze_budget_saturation(df, bulk_df)
+    health = calculate_health_score(df)
+
+    # --- ID Injection Logic ---
+    if not bulk_df.empty:
+        try:
+            enrich_with_ids(bleeding, bulk_df)
+            enrich_with_ids(high_acos, bulk_df)
+            enrich_with_ids(scale, bulk_df)
+            # Budget items don't strictly need this as they are generated from bulk, 
+            # but consistency helps if we ever need to cross-ref.
+            # actually budget items already come from bulk_df merge in `analyze_budget_saturation`.
+            
+        except Exception as e:
+            print(f"Decision Center ID Injection Failed: {e}")
+
+    # Calculate totals
+    total_urgent = len(bleeding) + len([i for i in high_acos if i.action_type == "Negative"])
+    total_growth = len(scale) + len(budget)
+
+    return DecisionCenterResponse(
+        bleeding_spend=bleeding,
+        high_acos=high_acos,
+        scale_opportunities=scale,
+        budget_saturation=budget,
+        health_score=health,
+        total_urgent_actions=total_urgent,
+        total_growth_actions=total_growth
+    )

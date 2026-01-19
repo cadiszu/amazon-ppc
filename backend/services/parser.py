@@ -58,6 +58,19 @@ COLUMN_MAPPINGS = {
     # Portfolio
     'portfolio name': 'Portfolio',
     'portfolio': 'Portfolio',
+    'portfolio id': 'Portfolio ID',
+    # Bulk File Standardizations
+    'campaign name': 'Campaign Name',
+    'campaign': 'Campaign Name',
+    'ad group name': 'Ad Group Name',
+    # 'ad group': 'Ad Group Name',  <-- REMOVED: In Bulk Files, "Ad Group" is the ID column
+    'campaign id': 'Campaign ID',
+    'ad group id': 'Ad Group ID',
+    'keyword text': 'Keyword Text',
+    'match type': 'Match Type',
+    'record type': 'Record Type',
+    'entity': 'Record Type', 
+    'product targeting expression': 'Product Targeting Expression',
 }
 
 
@@ -79,7 +92,22 @@ def parse_file(content: bytes, filename: str) -> pd.DataFrame:
     if file_type == 'csv':
         df = pd.read_csv(BytesIO(content))
     else:
-        df = pd.read_excel(BytesIO(content))
+        try:
+            # Read all sheets to find the correct one
+            sheets = pd.read_excel(BytesIO(content), sheet_name=None)
+            
+            # Prioritize "Sponsored Products Campaigns" sheet (standard Bulk File)
+            if 'Sponsored Products Campaigns' in sheets:
+                df = sheets['Sponsored Products Campaigns']
+            # Fallback for older formats or if not found
+            elif 'Sponsored Products' in sheets:
+                 df = sheets['Sponsored Products']
+            else:
+                # Default to first sheet
+                df = list(sheets.values())[0]
+        except Exception:
+            # Fallback if sheet_name=None fails
+            df = pd.read_excel(BytesIO(content))
     
     return df
 
@@ -114,6 +142,11 @@ def validate_search_term_report(df: pd.DataFrame) -> Tuple[bool, List[str]]:
     missing = []
     for required in SEARCH_TERM_REQUIRED_COLUMNS:
         req_lower = required.lower().strip()
+        
+        # Handle aliases
+        if req_lower == 'ad group name' and 'ad group' in df_columns_lower:
+            continue
+            
         if req_lower not in df_columns_lower:
             missing.append(required)
     
@@ -172,6 +205,16 @@ def process_search_term_report(df: pd.DataFrame) -> pd.DataFrame:
     """
     # Normalize column names
     df = normalize_columns(df)
+    
+    # Handle Ad Group alias for STR specifically (Case Insensitive)
+    ad_group_col = None
+    for col in df.columns:
+        if col.lower().strip() == 'ad group':
+            ad_group_col = col
+            break
+            
+    if ad_group_col and 'Ad Group Name' not in df.columns:
+        df = df.rename(columns={ad_group_col: 'Ad Group Name'})
     
     # Clean numeric columns
     if 'Impressions' in df.columns:
@@ -261,5 +304,183 @@ def get_unique_portfolios(df: pd.DataFrame) -> List[str]:
     """Get unique portfolio names from DataFrame."""
     if 'Portfolio' not in df.columns:
         return []
-    portfolios = df['Portfolio'].dropna().unique().tolist()
-    return [p for p in portfolios if p and str(p).strip()]
+    return df['Portfolio'].dropna().unique().tolist()
+
+
+def process_bulk_file(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Process Amazon Bulk Operations file to extract campaign budgets.
+    Returns DataFrame with ['Campaign Name', 'Daily Budget', 'Campaign ID'].
+    """
+    # Normalize columns
+    df = normalize_columns(df)
+    
+    # Check for required columns - lenient check as names vary
+    # Amazon Bulk file typically has 'Record Type', 'Campaign', 'Daily Budget'
+    
+    # Map common variations
+    column_map = {
+        'campaign': 'Campaign',
+        'campaign name': 'Campaign',
+        'record type': 'Record Type',
+        'daily budget': 'Daily Budget',
+        'campaign daily budget': 'Daily Budget'
+    }
+    
+    df = df.rename(columns=lambda x: column_map.get(x.lower().strip(), x))
+    
+    if 'Record Type' not in df.columns or 'Daily Budget' not in df.columns:
+        # If standard columns missing, try to detect structure
+        if 'Entity' in df.columns: # Newer bulk format sometimes used "Entity"
+             df = df.rename(columns={'Entity': 'Record Type'})
+    
+    # Ensure Campaign column exists
+    if 'Campaign' not in df.columns and 'Campaign Name' in df.columns:
+         df['Campaign'] = df['Campaign Name']
+    
+    # Filter for Campaign records
+    if 'Record Type' in df.columns:
+        campaigns = df[df['Record Type'] == 'Campaign'].copy()
+    else:
+        # Fallback: records where Daily Budget is present
+        campaigns = df[df['Daily Budget'].notna()].copy()
+    
+    if campaigns.empty:
+        return pd.DataFrame(columns=['Campaign Name', 'Daily Budget'])
+    
+    # Select relevant columns
+    cols = ['Campaign', 'Daily Budget']
+    if 'Campaign ID' in df.columns:
+        cols.append('Campaign ID')
+        
+    # Create result
+    result = campaigns[cols].rename(columns={'Campaign': 'Campaign Name'})
+    
+    # Clean budget column
+    result['Daily Budget'] = result['Daily Budget'].apply(clean_currency)
+    
+    return result
+
+
+def enrich_with_ids(items: List[object], bulk_df: pd.DataFrame) -> int:
+    """
+    Enrich a list of items (objects or dicts) with Campaign ID, Ad Group ID, and Portfolio ID 
+    from a Bulk File DataFrame.
+    Returns the number of items enriched with at least an Ad Group ID.
+    """
+    if bulk_df.empty or not items:
+        return 0
+
+    try:
+        # Prepare Bulk DF for mapping
+        bdf = bulk_df.copy()
+        if 'Entity' in bdf.columns and 'Record Type' not in bdf.columns:
+            bdf = bdf.rename(columns={'Entity': 'Record Type'})
+        bdf = normalize_columns(bdf)
+
+        # Helper to clean IDs (remove .0 from floats)
+        def clean_id(val):
+            if pd.isna(val):
+                return None
+            s = str(val).strip()
+            if s.endswith('.0'):
+                return s[:-2]
+            return s
+
+        # 1. Campaign IDs & Portfolio IDs
+        cid_map = {}
+        pid_map = {}
+        
+        # Helper to add to maps
+        def add_to_campaign_maps(df_subset, name_col, id_col, port_col=None):
+            for _, row in df_subset.iterrows():
+                c_name = str(row[name_col]).lower().strip()
+                cid_map[c_name] = clean_id(row[id_col])
+                if port_col and port_col in row and pd.notna(row[port_col]):
+                    pid_map[c_name] = clean_id(row[port_col])
+
+        # Primary: Campaign Name
+        if 'Campaign Name' in bdf.columns and 'Campaign ID' in bdf.columns:
+            cols = ['Campaign Name', 'Campaign ID']
+            if 'Portfolio ID' in bdf.columns:
+                cols.append('Portfolio ID')
+            c_data = bdf[cols].dropna(subset=['Campaign Name', 'Campaign ID']).drop_duplicates()
+            add_to_campaign_maps(c_data, 'Campaign Name', 'Campaign ID', 'Portfolio ID' if 'Portfolio ID' in bdf.columns else None)
+            
+        # Secondary: Campaign Name (Informational only)
+        c_info_col = next((c for c in bdf.columns if c.lower().strip() == 'campaign name (informational only)'), None)
+        if c_info_col and 'Campaign ID' in bdf.columns:
+            cols = [c_info_col, 'Campaign ID']
+            if 'Portfolio ID' in bdf.columns:
+                cols.append('Portfolio ID')
+            c_data_info = bdf[cols].dropna(subset=[c_info_col, 'Campaign ID']).drop_duplicates()
+            add_to_campaign_maps(c_data_info, c_info_col, 'Campaign ID', 'Portfolio ID' if 'Portfolio ID' in bdf.columns else None)
+
+        # 2. Ad Group IDs
+        ag_id_col = 'Ad Group ID'
+        if 'Ad Group ID' not in bdf.columns and 'Ad Group' in bdf.columns:
+            if 'Ad Group Name' in bdf.columns:
+                ag_id_col = 'Ad Group'
+        
+        agid_map = {}
+        if ag_id_col in bdf.columns:
+            # Primary Source: Ad Group Name
+            if 'Campaign Name' in bdf.columns and 'Ad Group Name' in bdf.columns:
+                ag_data = bdf[['Campaign Name', 'Ad Group Name', ag_id_col]].dropna().drop_duplicates()
+                for _, row in ag_data.iterrows():
+                    cn = str(row['Campaign Name']).lower().strip()
+                    an = str(row['Ad Group Name']).lower().strip()
+                    agid_map[(cn, an)] = clean_id(row[ag_id_col])
+            
+            # Secondary Source: Informational Columns
+            c_info_col = next((c for c in bdf.columns if c.lower().strip() == 'campaign name (informational only)'), None)
+            a_info_col = next((c for c in bdf.columns if c.lower().strip() == 'ad group name (informational only)'), None)
+            
+            if c_info_col and a_info_col:
+                ag_data_info = bdf[[c_info_col, a_info_col, ag_id_col]].dropna().drop_duplicates()
+                for _, row in ag_data_info.iterrows():
+                    cn = str(row[c_info_col]).lower().strip()
+                    an = str(row[a_info_col]).lower().strip()
+                    agid_map[(cn, an)] = clean_id(row[ag_id_col])
+
+        # Inject into items
+        count = 0
+        for item in items:
+            # Handle both dicts and objects (Pydantic models)
+            is_dict = isinstance(item, dict)
+            
+            if is_dict:
+                c_name = str(item.get('campaign_name', '')).lower().strip()
+                a_name = str(item.get('ad_group_name', '')).lower().strip()
+            else:
+                c_name = str(getattr(item, 'campaign_name', '')).lower().strip()
+                a_name = str(getattr(item, 'ad_group_name', '')).lower().strip()
+            
+            cid = None
+            pid = None
+            agid = None
+            
+            if c_name in cid_map:
+                cid = cid_map[c_name]
+            
+            if c_name in pid_map:
+                pid = pid_map[c_name]
+            
+            if (c_name, a_name) in agid_map:
+                agid = agid_map[(c_name, a_name)]
+                count += 1
+            
+            if is_dict:
+                if cid: item['campaign_id'] = cid
+                if pid: item['portfolio_id'] = pid
+                if agid: item['ad_group_id'] = agid
+            else:
+                if cid: setattr(item, 'campaign_id', cid)
+                if pid: setattr(item, 'portfolio_id', pid)
+                if agid: setattr(item, 'ad_group_id', agid)
+        
+        return count
+        
+    except Exception as e:
+        print(f"ID Enrichment Failed: {e}")
+        return 0

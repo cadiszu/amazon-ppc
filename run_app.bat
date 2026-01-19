@@ -10,6 +10,14 @@ echo "  Amazon PPC Analyzer & Automation App Launcher"
 echo ===================================================
 echo.
 
+echo [0/4] Cleaning up ports 8000 (Backend) and 3000 (Frontend)...
+:: kill processes on ports 8000 and 3000 to prevent conflicts (excluding PID 0)
+powershell -Command "try { Get-NetTCPConnection -LocalPort 8000 -ErrorAction Stop | Where-Object { $_.OwningProcess -ne 0 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } } catch {}"
+powershell -Command "try { Get-NetTCPConnection -LocalPort 3000 -ErrorAction Stop | Where-Object { $_.OwningProcess -ne 0 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } } catch {}"
+
+:: Give it a moment to release ports
+timeout /t 2 /nobreak >nul
+
 :: 1. Check Python
 echo [1/4] Checking Python...
 python --version >nul 2>&1
@@ -59,12 +67,12 @@ if not exist "backend" goto error_backend_dir
 
 cd backend
 echo Installing/Verifying Python dependencies...
-%PYTHON_CMD% -m pip install -r requirements.txt
+%PYTHON_CMD% -m pip install -r requirements.txt >nul 2>&1
 if errorlevel 1 goto error_pip
 
-echo Starting Backend Server...
-:: Launch in new window and keep open
-start "Amazon PPC Backend" cmd /k "%PYTHON_CMD% main.py"
+echo Starting Backend Server (Background)...
+:: Launch in new window MINIMIZED
+start /MIN "Amazon PPC Backend" cmd /k "%PYTHON_CMD% main.py"
 goto start_frontend
 
 :error_backend_dir
@@ -84,12 +92,15 @@ cd ..\frontend
 if errorlevel 1 goto error_frontend_dir
 
 echo Installing/Verifying Node.js dependencies...
-call npm install
-if errorlevel 1 goto error_npm
+:: Only run install if node_modules missing to speed up restart
+if not exist "node_modules" (
+    call npm install
+    if errorlevel 1 goto error_npm
+)
 
-echo Starting Frontend Server...
-:: Launch in new window and keep open
-start "Amazon PPC Frontend" cmd /k "npm run dev"
+echo Starting Frontend Server (Background)...
+:: Launch in new window MINIMIZED
+start /MIN "Amazon PPC Frontend" cmd /k "npm run dev"
 goto success
 
 :error_frontend_dir
@@ -108,7 +119,9 @@ echo ===================================================
 echo   Application launched!
 echo   Frontend: http://localhost:3000
 echo   Backend:  http://localhost:8000
-echo   (You can close this window if you want)
-echo ===================================================
 echo.
-pause
+echo   Servers are running in the background (minimized).
+echo   This window will close in 5 seconds...
+echo ===================================================
+timeout /t 5
+exit
