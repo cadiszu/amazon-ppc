@@ -144,10 +144,18 @@ class BiddingStrategy(str, Enum):
     FIXED = "fixed bids"
 
 
+class PlacementBidAdjustment(BaseModel):
+    """Placement bid adjustment percentages for campaign level."""
+    top_of_search: int = Field(default=0, ge=0, le=900, description="Top of Search bid adjustment %")
+    product_pages: int = Field(default=0, ge=0, le=900, description="Product Pages bid adjustment %")
+    rest_of_search: int = Field(default=0, ge=0, le=900, description="Rest of Search bid adjustment %")
+
+
 class AdGroupConfig(BaseModel):
     """Configuration for an ad group in auto campaign."""
     ad_group_name: str
     default_bid: float = Field(ge=0.02)
+    skus: List[str] = Field(default=[], description="List of SKUs to advertise in this ad group")
     close_match: bool = True
     close_match_bid: Optional[float] = None
     loose_match: bool = True
@@ -165,6 +173,7 @@ class AutoCampaignConfig(BaseModel):
     daily_budget: float = Field(ge=1.0)
     bidding_strategy: BiddingStrategy = BiddingStrategy.DYNAMIC_DOWN
     start_date: date
+    placement_bid_adjustment: Optional[PlacementBidAdjustment] = None
     ad_groups: List[AdGroupConfig]
 
 

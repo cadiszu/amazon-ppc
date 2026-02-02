@@ -1,6 +1,7 @@
 """
 Auto Campaign Generator.
 Generates Amazon-compliant bulk upload files for Sponsored Products Auto campaigns.
+Uses official Amazon Advertising bulksheet column format.
 """
 
 import pandas as pd
@@ -9,13 +10,39 @@ from typing import List, Optional
 from datetime import date
 
 
-# Auto targeting expression types
-AUTO_TARGETING_TYPES = {
-    'close_match': 'close-match',
-    'loose_match': 'loose-match',
-    'substitutes': 'substitutes',
-    'complements': 'complements'
-}
+# Amazon Sponsored Products Bulksheet columns (official format)
+BULK_COLUMNS = [
+    'Product',
+    'Entity',
+    'Operation',
+    'Campaign ID',
+    'Ad Group ID',
+    'Portfolio ID',
+    'Ad ID',
+    'Keyword ID',
+    'Product Targeting ID',
+    'Campaign Name',
+    'Ad Group Name',
+    'Start Date',
+    'End Date',
+    'Targeting Type',
+    'State',
+    'Daily Budget',
+    'SKU',
+    'ASIN (Informational only)',
+    'Ad Group Default Bid',
+    'Bid',
+    'Keyword Text',
+    'Match Type',
+    'Bidding Strategy',
+    'Placement',
+    'Percentage',
+]
+
+
+def create_empty_row() -> dict:
+    """Create an empty row with all columns."""
+    return {col: '' for col in BULK_COLUMNS}
 
 
 def generate_campaign_row(
@@ -23,30 +50,51 @@ def generate_campaign_row(
     daily_budget: float,
     bidding_strategy: str,
     start_date: date,
-    portfolio: Optional[str] = None
+    portfolio_id: Optional[str] = None
 ) -> dict:
     """Generate a campaign row for bulk upload."""
-    return {
-        'Record Type': 'Campaign',
-        'Campaign ID': '',
+    row = create_empty_row()
+    row.update({
+        'Product': 'Sponsored Products',
+        'Entity': 'Campaign',
+        'Operation': 'Create',
+        'Campaign ID': campaign_name,  # Use campaign name as temporary ID for new campaigns
         'Campaign Name': campaign_name,
-        'Campaign State': 'Enabled',
-        'Campaign Daily Budget': daily_budget,
-        'Portfolio ID': '',
-        'Campaign Start Date': start_date.strftime('%Y%m%d'),
-        'Campaign End Date': '',
-        'Campaign Targeting Type': 'Auto',
-        'Campaign Bidding Strategy': bidding_strategy,
-        'Ad Group ID': '',
-        'Ad Group Name': '',
-        'Ad Group State': '',
-        'Ad Group Default Bid': '',
-        'Targeting ID': '',
-        'Targeting Expression': '',
-        'Targeting Expression State': '',
-        'Targeting Expression Bid': '',
-        'Operation': 'Create'
-    }
+        'State': 'enabled',
+        'Daily Budget': daily_budget,
+        'Start Date': start_date.strftime('%Y%m%d'),
+        'Targeting Type': 'Auto',
+        'Bidding Strategy': bidding_strategy,
+    })
+    if portfolio_id:
+        row['Portfolio ID'] = portfolio_id
+    return row
+
+
+def generate_bidding_adjustment_row(
+    campaign_name: str,
+    placement: str,
+    percentage: int
+) -> dict:
+    """
+    Generate a bidding adjustment row for placement bid modifiers.
+    
+    Args:
+        campaign_name: Name of the campaign (also used as temporary Campaign ID)
+        placement: One of 'Placement Top', 'Placement Product Page', 'Placement Rest Of Search'
+        percentage: Bid increase percentage (0-900)
+    """
+    row = create_empty_row()
+    row.update({
+        'Product': 'Sponsored Products',
+        'Entity': 'Bidding Adjustment',
+        'Operation': 'Create',
+        'Campaign ID': campaign_name,  # Link to parent campaign
+        'Campaign Name': campaign_name,
+        'Placement': placement,
+        'Percentage': percentage,
+    })
+    return row
 
 
 def generate_ad_group_row(
@@ -55,27 +103,40 @@ def generate_ad_group_row(
     default_bid: float
 ) -> dict:
     """Generate an ad group row for bulk upload."""
-    return {
-        'Record Type': 'Ad Group',
-        'Campaign ID': '',
+    row = create_empty_row()
+    row.update({
+        'Product': 'Sponsored Products',
+        'Entity': 'Ad Group',
+        'Operation': 'Create',
+        'Campaign ID': campaign_name,  # Link to parent campaign
+        'Ad Group ID': ad_group_name,  # Use ad group name as temporary ID
         'Campaign Name': campaign_name,
-        'Campaign State': '',
-        'Campaign Daily Budget': '',
-        'Portfolio ID': '',
-        'Campaign Start Date': '',
-        'Campaign End Date': '',
-        'Campaign Targeting Type': '',
-        'Campaign Bidding Strategy': '',
-        'Ad Group ID': '',
         'Ad Group Name': ad_group_name,
-        'Ad Group State': 'Enabled',
+        'State': 'enabled',
         'Ad Group Default Bid': default_bid,
-        'Targeting ID': '',
-        'Targeting Expression': '',
-        'Targeting Expression State': '',
-        'Targeting Expression Bid': '',
-        'Operation': 'Create'
-    }
+    })
+    return row
+
+
+def generate_product_ad_row(
+    campaign_name: str,
+    ad_group_name: str,
+    sku: str
+) -> dict:
+    """Generate a product ad row for a SKU."""
+    row = create_empty_row()
+    row.update({
+        'Product': 'Sponsored Products',
+        'Entity': 'Product Ad',
+        'Operation': 'Create',
+        'Campaign ID': campaign_name,  # Link to parent campaign
+        'Ad Group ID': ad_group_name,  # Link to parent ad group
+        'Campaign Name': campaign_name,
+        'Ad Group Name': ad_group_name,
+        'State': 'enabled',
+        'SKU': sku,
+    })
+    return row
 
 
 def generate_auto_targeting_row(
@@ -84,28 +145,30 @@ def generate_auto_targeting_row(
     targeting_type: str,
     bid: Optional[float] = None
 ) -> dict:
-    """Generate an auto targeting row for bulk upload."""
-    return {
-        'Record Type': 'Product Targeting',
-        'Campaign ID': '',
+    """
+    Generate an auto targeting row for bulk upload.
+    
+    Args:
+        campaign_name: Name of the campaign (also used as Campaign ID)
+        ad_group_name: Name of the ad group (also used as Ad Group ID)
+        targeting_type: One of 'close-match', 'loose-match', 'substitutes', 'complements'
+        bid: Optional bid override for this targeting type
+    """
+    row = create_empty_row()
+    row.update({
+        'Product': 'Sponsored Products',
+        'Entity': 'Product Targeting',
+        'Operation': 'Create',
+        'Campaign ID': campaign_name,  # Link to parent campaign
+        'Ad Group ID': ad_group_name,  # Link to parent ad group
         'Campaign Name': campaign_name,
-        'Campaign State': '',
-        'Campaign Daily Budget': '',
-        'Portfolio ID': '',
-        'Campaign Start Date': '',
-        'Campaign End Date': '',
-        'Campaign Targeting Type': '',
-        'Campaign Bidding Strategy': '',
-        'Ad Group ID': '',
         'Ad Group Name': ad_group_name,
-        'Ad Group State': '',
-        'Ad Group Default Bid': '',
-        'Targeting ID': '',
-        'Targeting Expression': f'auto-targeting={targeting_type}',
-        'Targeting Expression State': 'Enabled',
-        'Targeting Expression Bid': bid if bid else '',
-        'Operation': 'Create'
-    }
+        'State': 'enabled',
+        'Keyword Text': f'auto-targeting={targeting_type}',
+    })
+    if bid:
+        row['Bid'] = bid
+    return row
 
 
 def generate_auto_campaign_bulk_file(
@@ -114,7 +177,8 @@ def generate_auto_campaign_bulk_file(
     bidding_strategy: str,
     start_date: date,
     ad_groups: List[dict],
-    portfolio: Optional[str] = None
+    portfolio: Optional[str] = None,
+    placement_bid_adjustment: Optional[dict] = None
 ) -> BytesIO:
     """
     Generate an Amazon-compliant bulk upload file for an auto campaign.
@@ -127,6 +191,7 @@ def generate_auto_campaign_bulk_file(
         ad_groups: List of ad group configurations, each containing:
             - ad_group_name: str
             - default_bid: float
+            - skus: List[str] (SKUs to advertise)
             - close_match: bool
             - close_match_bid: Optional[float]
             - loose_match: bool
@@ -135,7 +200,11 @@ def generate_auto_campaign_bulk_file(
             - substitutes_bid: Optional[float]
             - complements: bool
             - complements_bid: Optional[float]
-        portfolio: Optional portfolio name
+        portfolio: Optional portfolio name/ID
+        placement_bid_adjustment: Optional dict with:
+            - top_of_search: int (0-900)
+            - product_pages: int (0-900)
+            - rest_of_search: int (0-900)
     
     Returns:
         BytesIO object containing the Excel file
@@ -148,13 +217,35 @@ def generate_auto_campaign_bulk_file(
         daily_budget=daily_budget,
         bidding_strategy=bidding_strategy,
         start_date=start_date,
-        portfolio=portfolio
+        portfolio_id=portfolio
     ))
     
-    # 2. Ad Group rows and targeting rows
+    # 2. Bidding Adjustment rows (placement bid modifiers)
+    if placement_bid_adjustment:
+        if placement_bid_adjustment.get('top_of_search', 0) > 0:
+            rows.append(generate_bidding_adjustment_row(
+                campaign_name=campaign_name,
+                placement='Placement Top',
+                percentage=placement_bid_adjustment['top_of_search']
+            ))
+        if placement_bid_adjustment.get('product_pages', 0) > 0:
+            rows.append(generate_bidding_adjustment_row(
+                campaign_name=campaign_name,
+                placement='Placement Product Page',
+                percentage=placement_bid_adjustment['product_pages']
+            ))
+        if placement_bid_adjustment.get('rest_of_search', 0) > 0:
+            rows.append(generate_bidding_adjustment_row(
+                campaign_name=campaign_name,
+                placement='Placement Rest Of Search',
+                percentage=placement_bid_adjustment['rest_of_search']
+            ))
+    
+    # 3. Ad Group rows, Product Ad rows, and targeting rows
     for ag in ad_groups:
         ag_name = ag.get('ad_group_name', '')
         default_bid = ag.get('default_bid', 0.75)
+        skus = ag.get('skus', [])
         
         # Add ad group row
         rows.append(generate_ad_group_row(
@@ -162,6 +253,15 @@ def generate_auto_campaign_bulk_file(
             ad_group_name=ag_name,
             default_bid=default_bid
         ))
+        
+        # Add product ad rows for each SKU
+        for sku in skus:
+            if sku and sku.strip():
+                rows.append(generate_product_ad_row(
+                    campaign_name=campaign_name,
+                    ad_group_name=ag_name,
+                    sku=sku.strip()
+                ))
         
         # Add auto targeting rows for enabled types
         if ag.get('close_match', False):
@@ -196,35 +296,13 @@ def generate_auto_campaign_bulk_file(
                 bid=ag.get('complements_bid')
             ))
     
-    # Create DataFrame with consistent columns
-    columns = [
-        'Record Type',
-        'Campaign ID',
-        'Campaign Name',
-        'Campaign State',
-        'Campaign Daily Budget',
-        'Portfolio ID',
-        'Campaign Start Date',
-        'Campaign End Date',
-        'Campaign Targeting Type',
-        'Campaign Bidding Strategy',
-        'Ad Group ID',
-        'Ad Group Name',
-        'Ad Group State',
-        'Ad Group Default Bid',
-        'Targeting ID',
-        'Targeting Expression',
-        'Targeting Expression State',
-        'Targeting Expression Bid',
-        'Operation'
-    ]
-    
-    df = pd.DataFrame(rows, columns=columns)
+    # Create DataFrame with Amazon column order
+    df = pd.DataFrame(rows, columns=BULK_COLUMNS)
     
     # Write to Excel
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='Sponsored Products', index=False)
+        df.to_excel(writer, sheet_name='Sponsored Products Campaigns', index=False)
     
     output.seek(0)
     return output

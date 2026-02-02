@@ -187,7 +187,8 @@ async def export_auto_campaign(config: AutoCampaignConfig):
         bidding_strategy=config.bidding_strategy.value,
         start_date=config.start_date,
         ad_groups=[ag.model_dump() for ag in config.ad_groups],
-        portfolio=config.portfolio
+        portfolio=config.portfolio,
+        placement_bid_adjustment=config.placement_bid_adjustment.model_dump() if config.placement_bid_adjustment else None
     )
     
     # Return as downloadable file
