@@ -3,11 +3,12 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+    # REMOVED ports: - we use expose instead
+    expose:
+      - "8000"
     environment:
-      - PORT=${PORT:-8000}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
+      - PORT=8000
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
     restart: unless-stopped
 
   frontend:
@@ -15,12 +16,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    # REMOVED ports:
+    expose:
+      - "3000"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     depends_on:
       - backend
     restart: unless-stopped
