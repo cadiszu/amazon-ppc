@@ -38,4 +38,4 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 USER nextjs
 EXPOSE 3000
 
-CMD ["sh", "-c", "node server.js -p ${PORT} -H 0.0.0.0"]
+CMD ["sh", "-c", "node server.js -p ${PORT} -H ${HOSTNAME}"]
